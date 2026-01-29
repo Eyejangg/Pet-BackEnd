@@ -8,7 +8,7 @@ const {
     getBookedDates,
     cancelBooking
 } = require('../controllers/bookingController');
-const { protect } = require('../middlewares/authMiddleware');
+const { verifyToken } = require('../middlewares/authJwt');
 
 // Debug Logger
 router.use((req, res, next) => {
@@ -17,20 +17,21 @@ router.use((req, res, next) => {
 });
 
 router.route('/')
-    .post(protect, createBooking);
+    .post(verifyToken, createBooking);
 
 console.log('Booking Routes Loaded: Cancellation Route /:id/cancel Registered');
 
 router.route('/my-bookings')
-    .get(protect, getMyBookings);
+    .get(verifyToken, getMyBookings);
 
 // New Routes for Provider
 router.route('/provider-bookings')
-    .get(protect, getProviderBookings);
+    .get(verifyToken, getProviderBookings);
 
 // Specific ID Routes (Ordered carefully)
-router.put('/:id/cancel', protect, cancelBooking);
-router.put('/:id/status', protect, updateBookingStatus);
+// Ensure :id doesn't catch "my-bookings" if defined after
+router.put('/:id/cancel', verifyToken, cancelBooking);
+router.put('/:id/status', verifyToken, updateBookingStatus);
 
 router.route('/service/:serviceId/availability')
     .get(getBookedDates);

@@ -1,16 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const { getServices, getServiceById, createService, updateService, deleteService } = require('../controllers/serviceController');
-const { protect } = require('../middlewares/authMiddleware');
+const { verifyToken } = require('../middlewares/authJwt');
 const { upload, uploadImage } = require('../middlewares/uploadMiddlewareLocal');
 
 router.route('/')
     .get(getServices)
-    .post(protect, upload.single('image'), uploadImage, createService);
+    .post(verifyToken, upload.single('image'), uploadImage, createService);
 
 router.route('/:id')
     .get(getServiceById)
-    .put(protect, upload.single('image'), uploadImage, updateService)
-    .delete(protect, deleteService);
+    .put(verifyToken, upload.single('image'), uploadImage, updateService)
+    .delete(verifyToken, deleteService);
 
 module.exports = router;

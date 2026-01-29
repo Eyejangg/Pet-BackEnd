@@ -13,7 +13,7 @@ const serviceSchema = new mongoose.Schema({
     },
     serviceTypes: {
         type: [String],
-        enum: ['Pet Boarding', 'Pet Sitting', 'Dog Walking', 'Grooming'],
+        enum: ['Pet Boarding', 'Pet Sitting', 'Dog Walking', 'Grooming', 'Training'],
         required: [true, 'Please select at least one service type']
     },
     price: {

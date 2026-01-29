@@ -17,7 +17,7 @@ const createBooking = async (req, res) => {
             return res.status(404).json({ message: 'Service not found' });
         }
 
-        if (service.providerId.toString() === req.user.id) {
+        if (service.providerId.toString() === req.authorId) {
             return res.status(400).json({ message: 'You cannot book your own service' });
         }
 
@@ -36,7 +36,7 @@ const createBooking = async (req, res) => {
         }
 
         const booking = await Booking.create({
-            userId: req.user.id,
+            userId: req.authorId,
             serviceId,
             bookingDate,
             petName,
@@ -56,7 +56,7 @@ const createBooking = async (req, res) => {
 // @route   GET /api/bookings/my-bookings
 const getMyBookings = async (req, res) => {
     try {
-        const bookings = await Booking.find({ userId: req.user.id })
+        const bookings = await Booking.find({ userId: req.authorId })
             .populate('serviceId', 'title image')
             .sort({ bookingDate: -1 });
 
@@ -73,7 +73,7 @@ const getMyBookings = async (req, res) => {
 const getProviderBookings = async (req, res) => {
     try {
         // 1. Find all services created by me
-        const myServices = await Service.find({ providerId: req.user.id }).select('_id');
+        const myServices = await Service.find({ providerId: req.authorId }).select('_id');
 
         // 2. Extract IDs
         const serviceIds = myServices.map(s => s._id);
@@ -97,7 +97,7 @@ const getProviderBookings = async (req, res) => {
 const updateBookingStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        console.log(`Update Status Request: ID=${req.params.id}, Status=${status}, User=${req.user.id}`);
+        console.log(`Update Status Request: ID=${req.params.id}, Status=${status}, User=${req.authorId}`);
 
         const booking = await Booking.findById(req.params.id).populate('serviceId');
 
@@ -111,12 +111,12 @@ const updateBookingStatus = async (req, res) => {
             bookingId: booking._id,
             bookingUserId: booking.userId,
             serviceId: booking.serviceId ? booking.serviceId._id : 'NULL',
-            reqUserId: req.user.id
+            reqUserId: req.authorId
         });
 
         // Determine Roles
         const bookingUserId = String(booking.userId);
-        const reqUserId = String(req.user.id);
+        const reqUserId = String(req.authorId);
 
         const isCustomer = bookingUserId === reqUserId;
         let isProvider = false;
@@ -161,7 +161,7 @@ const updateBookingStatus = async (req, res) => {
             if (status === 'Confirmed') {
                 await Service.findByIdAndUpdate(booking.serviceId._id, { isBooked: true });
             }
-            else if (status === 'Cancelled' || status === 'Rejected') {
+            else if (status === 'Cancelled' || status === 'Rejected' || status === 'Completed') {
                 await Service.findByIdAndUpdate(booking.serviceId._id, { isBooked: false });
             }
         }
@@ -201,7 +201,7 @@ const cancelBooking = async (req, res) => {
         }
 
         // Check ownership
-        if (booking.userId.toString() !== req.user.id) {
+        if (booking.userId.toString() !== req.authorId) {
             return res.status(401).json({ message: 'Not authorized to cancel this booking' });
         }
 

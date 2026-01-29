@@ -56,7 +56,7 @@ const createService = async (req, res) => {
         }
 
         const service = await Service.create({
-            providerId: req.user.id,
+            providerId: req.authorId,
             title,
             serviceTypes: parsedServiceTypes,
             price,
@@ -67,8 +67,10 @@ const createService = async (req, res) => {
 
         res.status(201).json(service);
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        console.error("Error in createService:", error);
+        console.error("Request Body:", req.body);
+        console.error("Request File:", req.file);
+        res.status(500).json({ message: 'Server Error', error: error.message });
     }
 };
 
@@ -86,7 +88,7 @@ const updateService = async (req, res) => {
         }
 
         // Check ownership
-        if (service.providerId.toString() !== req.user.id) {
+        if (service.providerId.toString() !== req.authorId) {
             return res.status(401).json({ message: 'Not authorized to update this service' });
         }
 
@@ -140,7 +142,7 @@ const deleteService = async (req, res) => {
 
         console.log('Service found:', service.title);
         // Check user ownership
-        if (service.providerId.toString() !== req.user.id && req.user.role !== 'admin') {
+        if (service.providerId.toString() !== req.authorId && req.role !== 'admin') {
             return res.status(401).json({ message: 'Not authorized to delete this service' });
         }
 
