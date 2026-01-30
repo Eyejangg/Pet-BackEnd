@@ -30,108 +30,60 @@ const supabase = createClient(
 );
 const supabaseStorage = supabase.storage;
 
-//========== Multer Configuration ==========
-// ตั้งค่า multer เพื่อเก็บไฟล์ในหน่วยความจำ (เตรียมส่งไปยัง Supabase)
-const upload = multer({
-    storage: multer.memoryStorage(), // เก็บในหน่วยความจำแทนดิสก์
-    limits: { fileSize: 5 * 1024 * 1024 }, // จำกัดขนาดไฟล์ 5MB
-    fileFilter: (req, file, cb) => {
-        // เรียกฟังก์ชันตรวจสอบประเภทไฟล์
-        checkFileType(file, cb);
+//========== Multer Configuration (Local Storage) ==========
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, 'uploads/'); // Save to server/uploads
     },
-}).single("image"); // IMPORTANT: Changed from "file" to "image" to match frontend logic
+    filename: function (req, file, cb) {
+        // Create unique filename: timestamp-originalName
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+const upload = multer({
+    storage: storage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+    fileFilter: (req, file, cb) => {
+        checkFileType(file, cb);
+    }
+}).single("image");
 
 //========== Function: ตรวจสอบประเภทไฟล์ ==========
-// ฟังก์ชันนี้ตรวจสอบว่าไฟล์เป็นรูปภาพที่อนุญาตหรือไม่
 function checkFileType(file, cb) {
-    // ชนิดไฟล์ที่อนุญาต
     const fileTypes = /jpeg|jpg|png|gif|webp/;
-
-    // ตรวจสอบนามสกุลไฟล์ (เช่น .jpg, .png)
-    const extName = fileTypes.test(
-        path.extname(file.originalname).toLocaleLowerCase()
-    );
-
-    // ตรวจสอบ MIME type (เช่น image/jpeg, image/png)
+    const extName = fileTypes.test(path.extname(file.originalname).toLocaleLowerCase());
     const mimetype = fileTypes.test(file.mimetype);
 
-    // ถ้าทั้ง extension และ mimetype ถูกต้อง อนุญาตให้ upload
     if (mimetype && extName) {
         return cb(null, true);
     } else {
-        // ถ้าไฟล์ไม่ถูกต้อง ส่ง error
         cb(new Error("Error: Image files only (jpeg, jpg, png, gif, webp)"));
     }
 }
 
-//========== Middleware: Upload ไฟล์ไปยัง Supabase Storage ==========
-// ฟังก์ชัน middleware นี้จัดการการอัพโหลดไฟล์ไปยัง Supabase Storage
+//========== Middleware: Mock Supabase (For Local Storage) ==========
+// This function mimics the Supabase middleware but just maps local file path to publicUrl
+// so that controllers don't break.
 async function uploadToSupabase(req, res, next) {
-    // ถ้าไม่มีไฟล์ในการร้องขอ ข้ามไปขั้นตอนต่อไป
     if (!req.file) {
-        console.log("No file to upload");
         next();
         return;
     }
 
-    try {
-        // ตรวจสอบ configuration ก่อน upload
-        if (!supabaseConfig.supabaseUrl) {
-            throw new Error("SUPABASE_URL is not configured in .env");
-        }
-        if (!supabaseConfig.supabaseServiceRoleKey && !supabaseConfig.supabaseAnonKey) {
-            throw new Error("SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY is required in .env");
-        }
+    // Map local path to a URL accessible from frontend
+    // Assuming backend runs on localhost:5000
+    const API_URL = process.env.VITE_API_URL || "http://localhost:5000";
+    // Construct local URL
+    const localUrl = `${API_URL}/uploads/${req.file.filename}`;
 
-        console.log(`🚀 Starting upload to bucket: ${bucketName}`);
+    // Mock Supabase fields so controller doesn't need changes
+    req.file.supabaseUrl = localUrl;
+    req.file.publicUrl = localUrl;
 
-        // สร้างชื่อไฟล์ที่ไม่ซ้ำกัน: timestamp + ชื่อเดิม
-        const fileName = `${Date.now()}-${req.file.originalname}`;
-        // กำหนด path ที่จัดเก็บไฟล์ใน Supabase
-        const filePath = `uploads/${fileName}`;
-
-        // อัพโหลดไฟล์ไปยัง Supabase bucket
-        const { data, error } = await supabaseStorage
-            .from(bucketName) // เลือก bucket
-            .upload(filePath, req.file.buffer, {
-                // อัพโหลดไฟล์จากหน่วยความจำ
-                contentType: req.file.mimetype, // ระบุ MIME type ของไฟล์
-            });
-
-        // ถ้าเกิด error ในการอัพโหลด ทำการ throw error
-        if (error) {
-            console.error("Supabase error details:", JSON.stringify(error, null, 2));
-            throw new Error(`Supabase error: ${error.message || JSON.stringify(error)}`);
-        }
-
-        // ดึง public URL ของไฟล์จาก Supabase
-        const { data: publicData } = supabaseStorage
-            .from(bucketName)
-            .getPublicUrl(filePath);
-
-        // ตรวจสอบว่า URL ได้ถูกสร้างขึ้นมาหรือไม่
-        if (!publicData || !publicData.publicUrl) {
-            throw new Error("Failed to generate public URL from Supabase");
-        }
-
-        // เก็บ URL ในอ็อบเจ็กต์ req.file เพื่อใช้ในขั้นตอนต่อไป
-        req.file.supabaseUrl = publicData.publicUrl; // This matches professor's code
-        // IMPORTANT: Map to publicUrl as well for compatibility with my existing controller
-        req.file.publicUrl = publicData.publicUrl;
-
-        // แสดง log สำเร็จ
-        console.log("✓ File uploaded successfully:", req.file.supabaseUrl);
-        // ไปขั้นตอนต่อไป (controller)
-        next();
-    } catch (error) {
-        // ถ้าเกิด error ส่ง response error ไปยัง client
-        console.error("✗ Supabase upload error:", error.message);
-        console.error("Full error:", error);
-        res.status(500).json({
-            message: error.message || "Something went wrong while uploading to supabase",
-            error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-        });
-    }
+    console.log("✓ File saved locally:", localUrl);
+    next();
 }
 
 module.exports = { upload, uploadToSupabase };

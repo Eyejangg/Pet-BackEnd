@@ -1,16 +1,44 @@
 const express = require('express');
 const router = express.Router();
-const { getServices, getServiceById, createService, updateService, deleteService } = require('../controllers/serviceController');
-const { verifyToken } = require('../middlewares/authJwt');
-const { upload, uploadImage } = require('../middlewares/uploadMiddlewareLocal');
+const serviceController = require('../controllers/serviceController');
+const authJwt = require('../middlewares/authJwt');
+const { upload, uploadToSupabase } = require('../middlewares/file.middleware'); // Assuming using Supabase middleware as per user preference
 
-router.route('/')
-    .get(getServices)
-    .post(verifyToken, upload.single('image'), uploadImage, createService);
+//http://localhost:5000/api/services
+router.get(
+    "",
+    serviceController.getServices
+);
 
-router.route('/:id')
-    .get(getServiceById)
-    .put(verifyToken, upload.single('image'), uploadImage, updateService)
-    .delete(verifyToken, deleteService);
+//http://localhost:5000/api/services/:id
+router.get(
+    "/:id",
+    serviceController.getServiceById
+);
+
+//http://localhost:5000/api/services
+router.post(
+    "",
+    authJwt.verifyToken,
+    upload,
+    uploadToSupabase,
+    serviceController.createService
+);
+
+//http://localhost:5000/api/services/:id
+router.put(
+    "/:id",
+    authJwt.verifyToken,
+    upload,
+    uploadToSupabase,
+    serviceController.updateService
+);
+
+//http://localhost:5000/api/services/:id
+router.delete(
+    "/:id",
+    authJwt.verifyToken,
+    serviceController.deleteService
+);
 
 module.exports = router;

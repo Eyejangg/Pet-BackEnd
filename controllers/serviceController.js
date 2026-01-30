@@ -7,12 +7,25 @@ const Booking = require('../models/Booking');
 const getServices = async (req, res) => {
     try {
         const services = await Service.find()
-            .populate('providerId', 'username') // Only populate username, no email
-            .sort({ createdAt: -1 });
-        res.status(200).json(services);
+            .populate('providerId', 'username') // Only populate username
+            .sort({ createdAt: -1 })
+            .limit(20); // Limit matched to Professor's code
+
+        if (!services || services.length === 0) {
+            return res.status(404).json({ message: 'No services found' });
+        }
+
+        // Filter out services where provider (author) is null
+        const validServices = services.filter(service => service.providerId !== null);
+
+        if (validServices.length === 0) {
+            return res.status(404).json({ message: 'No valid services found' });
+        }
+
+        res.status(200).json(validServices);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        res.status(500).json({ message: 'Server Error fetching services', error: error.message });
     }
 };
 
@@ -20,15 +33,23 @@ const getServices = async (req, res) => {
 // @route   GET /api/services/:id
 // @access  Public
 const getServiceById = async (req, res) => {
+    const { id } = req.params;
     try {
-        const service = await Service.findById(req.params.id).populate('providerId', 'username');
+        const service = await Service.findById(id).populate('providerId', 'username');
+
         if (!service) {
             return res.status(404).json({ message: 'Service not found' });
         }
+
+        // Check if provider exists
+        if (!service.providerId) {
+            return res.status(404).json({ message: 'Service provider not found' });
+        }
+
         res.status(200).json(service);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        res.status(500).json({ message: 'Server Error fetching service' });
     }
 };
 
@@ -36,23 +57,34 @@ const getServiceById = async (req, res) => {
 // @route   POST /api/services
 // @access  Private
 const createService = async (req, res) => {
+    // 1. Check for Image Source (File or Raw URL)
+    const hasFile = req.file && (req.file.supabaseUrl || req.file.publicUrl);
+    const hasRawUrl = req.body.image && typeof req.body.image === 'string';
+
+    if (!hasFile && !hasRawUrl) {
+        return res.status(400).json({
+            message: "Image is required. Please upload a file via multipart/form-data OR provide an 'image' URL string in raw JSON."
+        });
+    }
+
+
     try {
         const { title, price, location, description, serviceTypes } = req.body;
-        const image = req.file ? req.file.publicUrl : null;
+        // Use supabaseUrl OR raw URL
+        const image = hasFile ? (req.file.supabaseUrl || req.file.publicUrl) : req.body.image;
 
-        // Note: serviceTypes might come as a JSON string from FormData
+        // Validation
+        if (!title || !price || !location || !description || !serviceTypes) {
+            return res.status(400).json({ message: 'Please provide all fields' });
+        }
+
         let parsedServiceTypes = serviceTypes;
         if (typeof serviceTypes === 'string') {
             try {
                 parsedServiceTypes = JSON.parse(serviceTypes);
             } catch (e) {
-                // If not JSON, maybe a single value or comma separated, but frontend sends JSON array string.
                 parsedServiceTypes = [serviceTypes];
             }
-        }
-
-        if (!title || !price || !location || !description || !image || !parsedServiceTypes || parsedServiceTypes.length === 0) {
-            return res.status(400).json({ message: 'Please provide all fields' });
         }
 
         const service = await Service.create({
@@ -65,11 +97,13 @@ const createService = async (req, res) => {
             description
         });
 
+        if (!service) {
+            return res.status(500).json({ message: "Cannot create a new service" });
+        }
+
         res.status(201).json(service);
     } catch (error) {
         console.error("Error in createService:", error);
-        console.error("Request Body:", req.body);
-        console.error("Request File:", req.file);
         res.status(500).json({ message: 'Server Error', error: error.message });
     }
 };
@@ -78,24 +112,32 @@ const createService = async (req, res) => {
 // @route   PUT /api/services/:id
 // @access  Private (Owner)
 const updateService = async (req, res) => {
-    try {
-        const { title, price, location, description, serviceTypes } = req.body;
+    const { id } = req.params;
+    const authorId = req.authorId;
 
-        let service = await Service.findById(req.params.id);
+    if (!id) {
+        return res.status(400).json({ message: "Service Id is missing" });
+    }
+
+    try {
+        // Find service AND check ownership in one query
+        const service = await Service.findOne({ _id: id, providerId: authorId });
 
         if (!service) {
-            return res.status(404).json({ message: 'Service not found' });
+            return res.status(403).json({
+                message: "Unauthorized: You are not the owner of this service or service not found"
+            });
         }
 
-        // Check ownership
-        if (service.providerId.toString() !== req.authorId) {
-            return res.status(401).json({ message: 'Not authorized to update this service' });
-        }
+        const { title, price, location, description, serviceTypes } = req.body;
 
-        // Handle Image Update
-        let image = service.image;
-        if (req.file) {
-            image = req.file.publicUrl;
+        // Handle Image Update (Support both File Upload and Raw URL)
+        let image = service.image; // Default to existing image
+
+        if (req.file && (req.file.supabaseUrl || req.file.publicUrl)) {
+            image = req.file.supabaseUrl || req.file.publicUrl;
+        } else if (req.body.image) {
+            image = req.body.image;
         }
 
         // Handle Service Types
@@ -112,18 +154,28 @@ const updateService = async (req, res) => {
             }
         }
 
-        service.title = title || service.title;
-        service.price = price || service.price;
-        service.location = location || service.location;
-        service.description = description || service.description;
-        service.serviceTypes = parsedServiceTypes;
-        service.image = image;
+        // Use findOneAndUpdate to update
+        const updatedService = await Service.findOneAndUpdate(
+            { _id: id, providerId: authorId },
+            {
+                title: title || service.title,
+                price: price || service.price,
+                location: location || service.location,
+                description: description || service.description,
+                serviceTypes: parsedServiceTypes,
+                image: image
+            },
+            { new: true }
+        );
 
-        const updatedService = await service.save();
+        if (!updatedService) {
+            return res.status(500).json({ message: "Cannot update this service" });
+        }
+
         res.status(200).json(updatedService);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error updating service' });
+        res.status(500).json({ message: 'Server Error updating service', error: error.message });
     }
 };
 
@@ -131,24 +183,27 @@ const updateService = async (req, res) => {
 // @route   DELETE /api/services/:id
 // @access  Private (Owner or Admin)
 const deleteService = async (req, res) => {
+    const { id } = req.params;
+    const authorId = req.authorId;
+
+    if (!id) return res.status(400).json({ message: "Service Id is missing" });
+
     try {
-        console.log('Attempting to delete service:', req.params.id);
-        const service = await Service.findById(req.params.id);
+        // Find first to check ownership AND active bookings
+        const service = await Service.findById(id);
 
         if (!service) {
-            console.log('Service not found in DB');
             return res.status(404).json({ message: 'Service not found' });
         }
 
-        console.log('Service found:', service.title);
-        // Check user ownership
-        if (service.providerId.toString() !== req.authorId && req.role !== 'admin') {
-            return res.status(401).json({ message: 'Not authorized to delete this service' });
+        // Ownership check (or Admin)
+        if (service.providerId.toString() !== authorId && req.role !== 'admin') {
+            return res.status(403).json({ message: 'Unauthorized: You are not the owner of this service' });
         }
 
         // Check for active bookings
         const activeBookings = await Booking.countDocuments({
-            serviceId: req.params.id,
+            serviceId: id,
             status: { $in: ['Pending', 'Confirmed'] }
         });
 
@@ -159,12 +214,12 @@ const deleteService = async (req, res) => {
         await service.deleteOne();
 
         // Cascade delete
-        await Booking.deleteMany({ serviceId: req.params.id });
+        await Booking.deleteMany({ serviceId: id });
 
-        res.status(200).json({ message: 'Service and associated bookings removed' });
+        res.status(200).json({ message: 'Service and associated bookings removed', data: service });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        res.status(500).json({ message: 'Server Error deleting service' });
     }
 };
 

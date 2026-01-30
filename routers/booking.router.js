@@ -1,39 +1,47 @@
 const express = require('express');
 const router = express.Router();
-const {
-    createBooking,
-    getMyBookings,
-    getProviderBookings,
-    updateBookingStatus,
-    getBookedDates,
-    cancelBooking
-} = require('../controllers/bookingController');
-const { verifyToken } = require('../middlewares/authJwt');
+const bookingController = require('../controllers/bookingController');
+const authJwt = require('../middlewares/authJwt');
 
-// Debug Logger
-router.use((req, res, next) => {
-    console.log(`[BookingRouter] ${req.method} ${req.url}`);
-    next();
-});
+//http://localhost:5000/api/bookings
+router.post(
+    "",
+    authJwt.verifyToken,
+    bookingController.createBooking
+);
 
-router.route('/')
-    .post(verifyToken, createBooking);
+//http://localhost:5000/api/bookings/my-bookings
+router.get(
+    "/my-bookings",
+    authJwt.verifyToken,
+    bookingController.getMyBookings
+);
 
-console.log('Booking Routes Loaded: Cancellation Route /:id/cancel Registered');
+//http://localhost:5000/api/bookings/provider-bookings
+router.get(
+    "/provider-bookings",
+    authJwt.verifyToken,
+    bookingController.getProviderBookings
+);
 
-router.route('/my-bookings')
-    .get(verifyToken, getMyBookings);
+//http://localhost:5000/api/bookings/:id/cancel
+router.put(
+    "/:id/cancel",
+    authJwt.verifyToken,
+    bookingController.cancelBooking
+);
 
-// New Routes for Provider
-router.route('/provider-bookings')
-    .get(verifyToken, getProviderBookings);
+//http://localhost:5000/api/bookings/:id/status
+router.put(
+    "/:id/status",
+    authJwt.verifyToken,
+    bookingController.updateBookingStatus
+);
 
-// Specific ID Routes (Ordered carefully)
-// Ensure :id doesn't catch "my-bookings" if defined after
-router.put('/:id/cancel', verifyToken, cancelBooking);
-router.put('/:id/status', verifyToken, updateBookingStatus);
-
-router.route('/service/:serviceId/availability')
-    .get(getBookedDates);
+//http://localhost:5000/api/bookings/service/:serviceId/availability
+router.get(
+    "/service/:serviceId/availability",
+    bookingController.getBookedDates
+);
 
 module.exports = router;

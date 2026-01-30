@@ -8,7 +8,7 @@ const createBooking = async (req, res) => {
         const { serviceId, bookingDate, petName, petType, petWeight, specialNotes } = req.body;
 
         if (!serviceId || !bookingDate || !petName || !petType || !petWeight) {
-            return res.status(400).json({ message: 'Please details: petName, petType, petWeight, bookingDate' });
+            return res.status(400).json({ message: 'Please provide all booking details' });
         }
 
         // Check for self-booking
@@ -17,14 +17,12 @@ const createBooking = async (req, res) => {
             return res.status(404).json({ message: 'Service not found' });
         }
 
+        // Owner cannot book own service
         if (service.providerId.toString() === req.authorId) {
             return res.status(400).json({ message: 'You cannot book your own service' });
         }
 
-        // Check if date is already booked (Confirmed)
-        // If status is "Pending", multiple can apply? User said "Must show someone booked it".
-        // Let's block "Confirmed" strictly.
-        // Actually, if it's "Confirmed" -> It's taken.
+        // Check if date is already booked and confirmed
         const existingBooking = await Booking.findOne({
             serviceId,
             bookingDate: new Date(bookingDate),
@@ -45,10 +43,14 @@ const createBooking = async (req, res) => {
             specialNotes
         });
 
+        if (!booking) {
+            return res.status(500).json({ message: "Cannot create booking" });
+        }
+
         res.status(201).json(booking);
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server Error creating booking' });
+        console.error("Error creating booking:", error);
+        res.status(500).json({ message: 'Server Error creating booking', error: error.message });
     }
 };
 
@@ -60,10 +62,14 @@ const getMyBookings = async (req, res) => {
             .populate('serviceId', 'title image')
             .sort({ bookingDate: -1 });
 
+        if (!bookings) {
+            return res.status(404).json({ message: "No bookings found" });
+        }
+
         res.status(200).json(bookings);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error fetching history' });
+        res.status(500).json({ message: 'Server Error fetching history', error: error.message });
     }
 };
 
@@ -87,7 +93,7 @@ const getProviderBookings = async (req, res) => {
         res.status(200).json(bookings);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error fetching provider bookings' });
+        res.status(500).json({ message: 'Server Error fetching provider bookings', error: error.message });
     }
 };
 
@@ -95,73 +101,47 @@ const getProviderBookings = async (req, res) => {
 // @route   PUT /api/bookings/:id/status
 // @access  Private (Provider Only)
 const updateBookingStatus = async (req, res) => {
+    const { id } = req.params;
+    const authorId = req.authorId;
+
+    if (!id) return res.status(400).json({ message: "Booking Id is missing" });
+
     try {
         const { status } = req.body;
-        console.log(`Update Status Request: ID=${req.params.id}, Status=${status}, User=${req.authorId}`);
-
-        const booking = await Booking.findById(req.params.id).populate('serviceId');
+        const booking = await Booking.findById(id).populate('serviceId');
 
         if (!booking) {
-            console.log('Booking not found');
             return res.status(404).json({ message: 'Booking not found' });
         }
 
-        // Debug Logs
-        console.log('Booking Data:', {
-            bookingId: booking._id,
-            bookingUserId: booking.userId,
-            serviceId: booking.serviceId ? booking.serviceId._id : 'NULL',
-            reqUserId: req.authorId
-        });
-
         // Determine Roles
-        const bookingUserId = String(booking.userId);
-        const reqUserId = String(req.authorId);
+        const isCustomer = String(booking.userId) === authorId;
+        const isProvider = booking.serviceId && String(booking.serviceId.providerId) === authorId;
 
-        const isCustomer = bookingUserId === reqUserId;
-        let isProvider = false;
-
-        if (booking.serviceId) {
-            // Check if providerId exists (it should)
-            if (booking.serviceId.providerId) {
-                isProvider = String(booking.serviceId.providerId) === reqUserId;
-            }
-        } else {
-            console.log('Warning: Service for this booking seems to be deleted.');
-        }
-
-        console.log(`Debug Roles: Customer=${isCustomer} (${bookingUserId} vs ${reqUserId}), Provider=${isProvider}`);
-
-        // Authorization Logic
         if (!isProvider && !isCustomer) {
-            console.log('Unauthorized: Not Provider and Not Customer');
-            // Return verbose error for debugging
-            return res.status(401).json({
-                message: `Not authorized. You are not the owner or provider. MyID: ${reqUserId}, OwnerID: ${bookingUserId}`
+            return res.status(403).json({
+                message: "Unauthorized: You are not associated with this booking"
             });
         }
 
-        // Specific Rules
         // 1. Customer can ONLY cancel
         if (isCustomer && !isProvider) {
             if (status !== 'Cancelled') {
-                console.log('Unauthorized: Customer tried to set non-Cancelled status');
-                return res.status(401).json({ message: 'Customers can only cancel their own bookings' });
+                return res.status(403).json({ message: 'Customers can only cancel their own bookings' });
             }
         }
 
-        // 2. Provider can do anything (Confirm, Reject, Complete, Cancel)
-        // (Logic allows it)
+        // 2. Provider can do anything logic...
 
         booking.status = status;
         await booking.save();
 
-        // Single-Use Logic (Only if Service exists)
+        // Update Service Availability
         if (booking.serviceId) {
             if (status === 'Confirmed') {
                 await Service.findByIdAndUpdate(booking.serviceId._id, { isBooked: true });
             }
-            else if (status === 'Cancelled' || status === 'Rejected' || status === 'Completed') {
+            else if (['Cancelled', 'Rejected', 'Completed'].includes(status)) {
                 await Service.findByIdAndUpdate(booking.serviceId._id, { isBooked: false });
             }
         }
@@ -193,16 +173,20 @@ const getBookedDates = async (req, res) => {
 // @route   PUT /api/bookings/:id/cancel
 // @access  Private (Owner only)
 const cancelBooking = async (req, res) => {
+    const { id } = req.params;
+    const authorId = req.authorId;
+
+    if (!id) return res.status(400).json({ message: "Booking Id is missing" });
+
     try {
-        const booking = await Booking.findById(req.params.id);
+        // Use precise query to check ownership immediately (Professor's style)
+        const booking = await Booking.findOne({ _id: id, userId: authorId });
 
         if (!booking) {
-            return res.status(404).json({ message: 'Booking ID not found in database' });
-        }
-
-        // Check ownership
-        if (booking.userId.toString() !== req.authorId) {
-            return res.status(401).json({ message: 'Not authorized to cancel this booking' });
+            // If not found by ID+User, check if it exists at all to give correct error
+            const exists = await Booking.findById(id);
+            if (!exists) return res.status(404).json({ message: 'Booking not found' });
+            return res.status(403).json({ message: 'Unauthorized: You are not the owner of this booking' });
         }
 
         // Check status
@@ -219,7 +203,7 @@ const cancelBooking = async (req, res) => {
         res.status(200).json({ message: 'Booking cancelled successfully', booking });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error cancelling booking' });
+        res.status(500).json({ message: 'Server Error cancelling booking', error: error.message });
     }
 };
 
