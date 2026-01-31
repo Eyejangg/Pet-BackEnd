@@ -1,62 +1,94 @@
 const Service = require('../models/Service');
 const Booking = require('../models/Booking');
 
-// @desc    Get all services
+//     ดึงข้อมูลบริการทั้งหมด
 // @route   GET /api/services
 // @access  Public
 const getServices = async (req, res) => {
     try {
         const services = await Service.find()
-            .populate('providerId', 'username') // Only populate username, no email
-            .sort({ createdAt: -1 });
-        res.status(200).json(services);
+            .populate('providerId', 'username') // Only populate username
+            .sort({ createdAt: -1 })
+            .limit(20); // Limit matched to Professor's code
+
+        if (!services || services.length === 0) {
+            return res.status(404).json({ message: 'No services found' });
+        }
+
+        // กรองบริการที่ไม่มีผู้สร้าง (Provider เป็น Null) ออกไป
+        const validServices = services.filter(service => service.providerId !== null);
+
+        if (validServices.length === 0) {
+            return res.status(404).json({ message: 'No valid services found' });
+        }
+
+        res.status(200).json(validServices);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        res.status(500).json({ message: 'Server Error fetching services', error: error.message });
     }
 };
 
-// @desc    Get single service by ID
+//    ดึงข้อมูลบริการตาม ID
 // @route   GET /api/services/:id
-// @access  Public
+// 
 const getServiceById = async (req, res) => {
+    const { id } = req.params;
     try {
-        const service = await Service.findById(req.params.id).populate('providerId', 'username');
+        const service = await Service.findById(id).populate('providerId', 'username');
+
         if (!service) {
             return res.status(404).json({ message: 'Service not found' });
         }
+
+        // ตรวจสอบว่าผู้ให้บริการยังอยู่ในระบบหรือไม่
+        if (!service.providerId) {
+            return res.status(404).json({ message: 'Service provider not found' });
+        }
+
         res.status(200).json(service);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        res.status(500).json({ message: 'Server Error fetching service' });
     }
 };
 
-// @desc    Create a service
+//     สร้างบริการใหม่
 // @route   POST /api/services
-// @access  Private
+// 
 const createService = async (req, res) => {
+    // 1. ตรวจสอบที่มาของรูปภาพ (ไฟล์อัพโหลด หรือ URL แบบข้อความ)
+    const hasFile = req.file && (req.file.supabaseUrl || req.file.publicUrl);
+    const hasRawUrl = req.body.image && typeof req.body.image === 'string';
+
+    if (!hasFile && !hasRawUrl) {
+        return res.status(400).json({
+            message: "Image is required. Please upload a file via multipart/form-data OR provide an 'image' URL string in raw JSON."
+        });
+    }
+
+
     try {
         const { title, price, location, description, serviceTypes } = req.body;
-        const image = req.file ? req.file.publicUrl : null;
+        // ใช้ supabaseUrl หรือ raw URL ตามที่ส่งมา
+        const image = hasFile ? (req.file.supabaseUrl || req.file.publicUrl) : req.body.image;
 
-        // Note: serviceTypes might come as a JSON string from FormData
+        // Validation
+        if (!title || !price || !location || !description || !serviceTypes) {
+            return res.status(400).json({ message: 'Please provide all fields' });
+        }
+
         let parsedServiceTypes = serviceTypes;
         if (typeof serviceTypes === 'string') {
             try {
                 parsedServiceTypes = JSON.parse(serviceTypes);
             } catch (e) {
-                // If not JSON, maybe a single value or comma separated, but frontend sends JSON array string.
                 parsedServiceTypes = [serviceTypes];
             }
         }
 
-        if (!title || !price || !location || !description || !image || !parsedServiceTypes || parsedServiceTypes.length === 0) {
-            return res.status(400).json({ message: 'Please provide all fields' });
-        }
-
         const service = await Service.create({
-            providerId: req.user.id,
+            providerId: req.authorId,
             title,
             serviceTypes: parsedServiceTypes,
             price,
@@ -65,38 +97,50 @@ const createService = async (req, res) => {
             description
         });
 
+        if (!service) {
+            return res.status(500).json({ message: "Cannot create a new service" });
+        }
+
         res.status(201).json(service);
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        console.error("Error in createService:", error);
+        res.status(500).json({ message: 'Server Error', error: error.message });
     }
 };
 
-// @desc    Update a service
+// แก้ไขข้อมูลบริการ
 // @route   PUT /api/services/:id
-// @access  Private (Owner)
-const updateService = async (req, res) => {
-    try {
-        const { title, price, location, description, serviceTypes } = req.body;
 
-        let service = await Service.findById(req.params.id);
+const updateService = async (req, res) => {
+    const { id } = req.params;
+    const authorId = req.authorId;
+
+    if (!id) {
+        return res.status(400).json({ message: "Service Id is missing" });
+    }
+
+    try {
+        // ค้นหาบริการ และ ตรวจสอบความเป็นเจ้าของในคำสั่งเดียว
+        const service = await Service.findOne({ _id: id, providerId: authorId });
 
         if (!service) {
-            return res.status(404).json({ message: 'Service not found' });
+            return res.status(403).json({
+                message: "Unauthorized: You are not the owner of this service or service not found"
+            });
         }
 
-        // Check ownership
-        if (service.providerId.toString() !== req.user.id) {
-            return res.status(401).json({ message: 'Not authorized to update this service' });
+        const { title, price, location, description, serviceTypes } = req.body;
+
+        // จัดการการอัพเดทรูปภาพ (รองรับทั้งการอัพโหลดไฟล์ใหม่ หรือส่ง URL เดิมมา)
+        let image = service.image; // ใช้รูปเดิมเป็นค่าเริ่มต้น
+
+        if (req.file && (req.file.supabaseUrl || req.file.publicUrl)) {
+            image = req.file.supabaseUrl || req.file.publicUrl;
+        } else if (req.body.image) {
+            image = req.body.image;
         }
 
-        // Handle Image Update
-        let image = service.image;
-        if (req.file) {
-            image = req.file.publicUrl;
-        }
-
-        // Handle Service Types
+        // จัดการประเภทบริการ (Service Types)
         let parsedServiceTypes = service.serviceTypes;
         if (serviceTypes) {
             if (typeof serviceTypes === 'string') {
@@ -110,43 +154,56 @@ const updateService = async (req, res) => {
             }
         }
 
-        service.title = title || service.title;
-        service.price = price || service.price;
-        service.location = location || service.location;
-        service.description = description || service.description;
-        service.serviceTypes = parsedServiceTypes;
-        service.image = image;
+        // ใช้ findOneAndUpdate เพื่อบันทึกข้อมูลใหม่
+        const updatedService = await Service.findOneAndUpdate(
+            { _id: id, providerId: authorId },
+            {
+                title: title || service.title,
+                price: price || service.price,
+                location: location || service.location,
+                description: description || service.description,
+                serviceTypes: parsedServiceTypes,
+                image: image
+            },
+            { new: true }
+        );
 
-        const updatedService = await service.save();
+        if (!updatedService) {
+            return res.status(500).json({ message: "Cannot update this service" });
+        }
+
         res.status(200).json(updatedService);
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error updating service' });
+        res.status(500).json({ message: 'Server Error updating service', error: error.message });
     }
 };
 
-// @desc    Delete a service
+// ลบบริการ
 // @route   DELETE /api/services/:id
-// @access  Private (Owner or Admin)
+
 const deleteService = async (req, res) => {
+    const { id } = req.params;
+    const authorId = req.authorId;
+
+    if (!id) return res.status(400).json({ message: "Service Id is missing" });
+
     try {
-        console.log('Attempting to delete service:', req.params.id);
-        const service = await Service.findById(req.params.id);
+        // ค้นหาบริการก่อน เพื่อตรวจสอบความเป็นเจ้าของ และ เช็คว่ามีคนจองค้างอยู่ไหม
+        const service = await Service.findById(id);
 
         if (!service) {
-            console.log('Service not found in DB');
             return res.status(404).json({ message: 'Service not found' });
         }
 
-        console.log('Service found:', service.title);
-        // Check user ownership
-        if (service.providerId.toString() !== req.user.id && req.user.role !== 'admin') {
-            return res.status(401).json({ message: 'Not authorized to delete this service' });
+        // ตรวจสอบความเป็นเจ้าของ (หรือเป็น Admin)
+        if (service.providerId.toString() !== authorId && req.role !== 'admin') {
+            return res.status(403).json({ message: 'Unauthorized: You are not the owner of this service' });
         }
 
-        // Check for active bookings
+        // ตรวจสอบว่ามีการจองที่ยังไม่เสร็จสิ้นหรือไม่
         const activeBookings = await Booking.countDocuments({
-            serviceId: req.params.id,
+            serviceId: id,
             status: { $in: ['Pending', 'Confirmed'] }
         });
 
@@ -156,13 +213,13 @@ const deleteService = async (req, res) => {
 
         await service.deleteOne();
 
-        // Cascade delete
-        await Booking.deleteMany({ serviceId: req.params.id });
+        // ลบข้อมูลการจองที่เกี่ยวข้องทั้งหมด 
+        await Booking.deleteMany({ serviceId: id });
 
-        res.status(200).json({ message: 'Service and associated bookings removed' });
+        res.status(200).json({ message: 'Service and associated bookings removed', data: service });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Server Error' });
+        res.status(500).json({ message: 'Server Error deleting service' });
     }
 };
 
