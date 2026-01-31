@@ -1,7 +1,7 @@
 const Service = require('../models/Service');
 const Booking = require('../models/Booking');
 
-// @desc    Get all services
+//     ดึงข้อมูลบริการทั้งหมด
 // @route   GET /api/services
 // @access  Public
 const getServices = async (req, res) => {
@@ -15,7 +15,7 @@ const getServices = async (req, res) => {
             return res.status(404).json({ message: 'No services found' });
         }
 
-        // Filter out services where provider (author) is null
+        // กรองบริการที่ไม่มีผู้สร้าง (Provider เป็น Null) ออกไป
         const validServices = services.filter(service => service.providerId !== null);
 
         if (validServices.length === 0) {
@@ -29,9 +29,9 @@ const getServices = async (req, res) => {
     }
 };
 
-// @desc    Get single service by ID
+//    ดึงข้อมูลบริการตาม ID
 // @route   GET /api/services/:id
-// @access  Public
+// 
 const getServiceById = async (req, res) => {
     const { id } = req.params;
     try {
@@ -41,7 +41,7 @@ const getServiceById = async (req, res) => {
             return res.status(404).json({ message: 'Service not found' });
         }
 
-        // Check if provider exists
+        // ตรวจสอบว่าผู้ให้บริการยังอยู่ในระบบหรือไม่
         if (!service.providerId) {
             return res.status(404).json({ message: 'Service provider not found' });
         }
@@ -53,11 +53,11 @@ const getServiceById = async (req, res) => {
     }
 };
 
-// @desc    Create a service
+//     สร้างบริการใหม่
 // @route   POST /api/services
-// @access  Private
+// 
 const createService = async (req, res) => {
-    // 1. Check for Image Source (File or Raw URL)
+    // 1. ตรวจสอบที่มาของรูปภาพ (ไฟล์อัพโหลด หรือ URL แบบข้อความ)
     const hasFile = req.file && (req.file.supabaseUrl || req.file.publicUrl);
     const hasRawUrl = req.body.image && typeof req.body.image === 'string';
 
@@ -70,7 +70,7 @@ const createService = async (req, res) => {
 
     try {
         const { title, price, location, description, serviceTypes } = req.body;
-        // Use supabaseUrl OR raw URL
+        // ใช้ supabaseUrl หรือ raw URL ตามที่ส่งมา
         const image = hasFile ? (req.file.supabaseUrl || req.file.publicUrl) : req.body.image;
 
         // Validation
@@ -108,9 +108,9 @@ const createService = async (req, res) => {
     }
 };
 
-// @desc    Update a service
+// แก้ไขข้อมูลบริการ
 // @route   PUT /api/services/:id
-// @access  Private (Owner)
+
 const updateService = async (req, res) => {
     const { id } = req.params;
     const authorId = req.authorId;
@@ -120,7 +120,7 @@ const updateService = async (req, res) => {
     }
 
     try {
-        // Find service AND check ownership in one query
+        // ค้นหาบริการ และ ตรวจสอบความเป็นเจ้าของในคำสั่งเดียว
         const service = await Service.findOne({ _id: id, providerId: authorId });
 
         if (!service) {
@@ -131,8 +131,8 @@ const updateService = async (req, res) => {
 
         const { title, price, location, description, serviceTypes } = req.body;
 
-        // Handle Image Update (Support both File Upload and Raw URL)
-        let image = service.image; // Default to existing image
+        // จัดการการอัพเดทรูปภาพ (รองรับทั้งการอัพโหลดไฟล์ใหม่ หรือส่ง URL เดิมมา)
+        let image = service.image; // ใช้รูปเดิมเป็นค่าเริ่มต้น
 
         if (req.file && (req.file.supabaseUrl || req.file.publicUrl)) {
             image = req.file.supabaseUrl || req.file.publicUrl;
@@ -140,7 +140,7 @@ const updateService = async (req, res) => {
             image = req.body.image;
         }
 
-        // Handle Service Types
+        // จัดการประเภทบริการ (Service Types)
         let parsedServiceTypes = service.serviceTypes;
         if (serviceTypes) {
             if (typeof serviceTypes === 'string') {
@@ -154,7 +154,7 @@ const updateService = async (req, res) => {
             }
         }
 
-        // Use findOneAndUpdate to update
+        // ใช้ findOneAndUpdate เพื่อบันทึกข้อมูลใหม่
         const updatedService = await Service.findOneAndUpdate(
             { _id: id, providerId: authorId },
             {
@@ -179,9 +179,9 @@ const updateService = async (req, res) => {
     }
 };
 
-// @desc    Delete a service
+// ลบบริการ
 // @route   DELETE /api/services/:id
-// @access  Private (Owner or Admin)
+
 const deleteService = async (req, res) => {
     const { id } = req.params;
     const authorId = req.authorId;
@@ -189,19 +189,19 @@ const deleteService = async (req, res) => {
     if (!id) return res.status(400).json({ message: "Service Id is missing" });
 
     try {
-        // Find first to check ownership AND active bookings
+        // ค้นหาบริการก่อน เพื่อตรวจสอบความเป็นเจ้าของ และ เช็คว่ามีคนจองค้างอยู่ไหม
         const service = await Service.findById(id);
 
         if (!service) {
             return res.status(404).json({ message: 'Service not found' });
         }
 
-        // Ownership check (or Admin)
+        // ตรวจสอบความเป็นเจ้าของ (หรือเป็น Admin)
         if (service.providerId.toString() !== authorId && req.role !== 'admin') {
             return res.status(403).json({ message: 'Unauthorized: You are not the owner of this service' });
         }
 
-        // Check for active bookings
+        // ตรวจสอบว่ามีการจองที่ยังไม่เสร็จสิ้นหรือไม่
         const activeBookings = await Booking.countDocuments({
             serviceId: id,
             status: { $in: ['Pending', 'Confirmed'] }
@@ -213,7 +213,7 @@ const deleteService = async (req, res) => {
 
         await service.deleteOne();
 
-        // Cascade delete
+        // ลบข้อมูลการจองที่เกี่ยวข้องทั้งหมด 
         await Booking.deleteMany({ serviceId: id });
 
         res.status(200).json({ message: 'Service and associated bookings removed', data: service });

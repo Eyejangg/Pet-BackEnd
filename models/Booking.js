@@ -20,7 +20,7 @@ const bookingSchema = new mongoose.Schema({
         enum: ['Pending', 'Confirmed', 'Completed', 'Cancelled', 'Rejected'],
         default: 'Pending'
     },
-    // Strict Pet Details
+    // รายละเอียดสัตว์เลี้ยง (บังคับกรอก)
     petName: {
         type: String,
         required: [true, 'Please add pet name']

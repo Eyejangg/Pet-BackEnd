@@ -2,7 +2,7 @@ const UserModel = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
-const secret = process.env.SECRET;
+const secret = process.env.JWT_SECRET;
 
 exports.register = async (req, res) => {
     const { username, password } = req.body;
@@ -52,14 +52,14 @@ exports.login = async (req, res) => {
         if (!isPasswordMatched) {
             return res.status(401).send({ message: "Invalid credentials" });
         }
-        //login successfully
+        // ล็อกอินสำเร็จ
         jwt.sign({ username, id: userDoc._id, role: userDoc.role }, secret, {}, (err, token) => {
             if (err) {
                 return res.status(500).send({
                     message: "Internal server error: Authentication failed",
                 });
             }
-            //token generation
+            // สร้าง Token
             res.send({
                 message: "User logged in successfully",
                 id: userDoc._id,

@@ -1,7 +1,7 @@
 const Booking = require('../models/Booking');
 const Service = require('../models/Service');
 
-// @desc    Create a new booking
+//     สร้างการจองใหม่
 // @route   POST /api/bookings
 const createBooking = async (req, res) => {
     try {
@@ -17,12 +17,15 @@ const createBooking = async (req, res) => {
             return res.status(404).json({ message: 'Service not found' });
         }
 
-        // Owner cannot book own service
+        // 2. กฎเหล็ก: "ห้ามจองของตัวเอง"
+        // ถ้าคนจอง (req.authorId) เป็นคนเดียวกับคนสร้าง Service (providerId) => ห้าม!
         if (service.providerId.toString() === req.authorId) {
-            return res.status(400).json({ message: 'You cannot book your own service' });
+            return res.status(400).json({ message: 'ไม่สามารถจองบริการของตนเองได้ (คุณเป็นเจ้าของบริการนี้)' });
         }
 
-        // Check if date is already booked and confirmed
+        // 3. กฎเหล็ก: "ห้ามจองซ้อน"
+        // ไปค้นในตาราง Booking ว่า "มีใครจอง Service นี้ ในวันเวลานี้ไปแล้วหรือยัง?"
+        // และสถานะต้องเป็น 'Confirmed' ด้วย (ถ้าแค่ Pending ยังจองได้ หรือรอคิวได้)
         const existingBooking = await Booking.findOne({
             serviceId,
             bookingDate: new Date(bookingDate),
@@ -54,7 +57,7 @@ const createBooking = async (req, res) => {
     }
 };
 
-// @desc    Get logged in user bookings (My History as a Client)
+// @desc    ดึงประวัติการจองของผู้ใช้ (ฉันเป็นลูกค้า)
 // @route   GET /api/bookings/my-bookings
 const getMyBookings = async (req, res) => {
     try {
@@ -73,21 +76,21 @@ const getMyBookings = async (req, res) => {
     }
 };
 
-// @desc    Get bookings for my services (I am the Provider)
+// @desc    ดึงรายการจองที่เข้ามาสำหรับบริการของฉัน (ฉันเป็นผู้ให้บริการ)
 // @route   GET /api/bookings/provider-bookings
 // @access  Private
 const getProviderBookings = async (req, res) => {
     try {
-        // 1. Find all services created by me
+        // 1. ค้นหาบริการทั้งหมดที่ฉันเป็นคนสร้าง
         const myServices = await Service.find({ providerId: req.authorId }).select('_id');
 
-        // 2. Extract IDs
+        // 2. ดึงเอาเฉพาะ ID ของบริการออกมา
         const serviceIds = myServices.map(s => s._id);
 
-        // 3. Find bookings that link to these services
+        // 3. ค้นหาการจองที่มี serviceId ตรงกับบริการของฉัน
         const bookings = await Booking.find({ serviceId: { $in: serviceIds } })
-            .populate('userId', 'username') // Who booked it?
-            .populate('serviceId', 'title image') // Which service?
+            .populate('userId', 'username') // ใครเป็นคนจอง?
+            .populate('serviceId', 'title image') // จองบริการไหน?
             .sort({ createdAt: -1 });
 
         res.status(200).json(bookings);
@@ -97,7 +100,7 @@ const getProviderBookings = async (req, res) => {
     }
 };
 
-// @desc    Update booking status (Approve/Reject)
+// @desc    อัพเดทสถานะการจอง (อนุมัติ/ปฏิเสธ)
 // @route   PUT /api/bookings/:id/status
 // @access  Private (Provider Only)
 const updateBookingStatus = async (req, res) => {
@@ -108,15 +111,15 @@ const updateBookingStatus = async (req, res) => {
 
     try {
         const { status } = req.body;
+        // 1. หาใบจองนี้ในระบบก่อน
         const booking = await Booking.findById(id).populate('serviceId');
-
         if (!booking) {
-            return res.status(404).json({ message: 'Booking not found' });
+            return res.status(404).json({ message: 'ไม่พบรายการจองนี้ (Booking not found)' });
         }
 
-        // Determine Roles
-        const isCustomer = String(booking.userId) === authorId;
-        const isProvider = booking.serviceId && String(booking.serviceId.providerId) === authorId;
+        // 2. ระบุตัวตน: "ใครเป็นคนเรียกใช้ API นี้?"
+        const isCustomer = String(booking.userId) === authorId; // คนจอง?
+        const isProvider = booking.serviceId && String(booking.serviceId.providerId) === authorId; // เจ้าของร้าน?
 
         if (!isProvider && !isCustomer) {
             return res.status(403).json({
@@ -124,7 +127,7 @@ const updateBookingStatus = async (req, res) => {
             });
         }
 
-        // 1. Customer can ONLY cancel
+        // 1. ลูกค้า (Customer) สามารถทำได้แค่ "ยกเลิก" เท่านั้น
         if (isCustomer && !isProvider) {
             if (status !== 'Cancelled') {
                 return res.status(403).json({ message: 'Customers can only cancel their own bookings' });
@@ -136,7 +139,7 @@ const updateBookingStatus = async (req, res) => {
         booking.status = status;
         await booking.save();
 
-        // Update Service Availability
+        // อัพเดทสถานะความว่างของ Service (Availability)
         if (booking.serviceId) {
             if (status === 'Confirmed') {
                 await Service.findByIdAndUpdate(booking.serviceId._id, { isBooked: true });
@@ -169,24 +172,29 @@ const getBookedDates = async (req, res) => {
     }
 };
 
-// @desc    Cancel booking (Customer)
+// @desc    ยกเลิกการจอง (สำหรับลูกค้า)
 // @route   PUT /api/bookings/:id/cancel
 // @access  Private (Owner only)
 const cancelBooking = async (req, res) => {
     const { id } = req.params;
     const authorId = req.authorId;
 
+    // เช็คว่าส่ง ID มาไหม? ถ้าไม่ส่งก็จบเลย
     if (!id) return res.status(400).json({ message: "Booking Id is missing" });
 
     try {
-        // Use precise query to check ownership immediately (Professor's style)
+        // 1. ค้นหาแบบ "เจาะจงเจ้าของ" (Best Practice ของอาจารย์) ✅
+        // หา Booking ID นี้ โดยที่ userId ต้องตรงกับคน Login เท่านั้น
+        // ถ้าหาเจอ แปลว่าเป็นเจ้าของตัวจริงชัวร์ๆ
         const booking = await Booking.findOne({ _id: id, userId: authorId });
 
         if (!booking) {
-            // If not found by ID+User, check if it exists at all to give correct error
+            // ถ้าหาไม่เจอ มี 2 กรณี:
+            // ก. ไม่มี Booking นี้ในโลก -> 404 Not Found
+            // ข. มี Booking แต่คุณไม่ใช่เจ้าของ -> 403 Forbidden
             const exists = await Booking.findById(id);
-            if (!exists) return res.status(404).json({ message: 'Booking not found' });
-            return res.status(403).json({ message: 'Unauthorized: You are not the owner of this booking' });
+            if (!exists) return res.status(404).json({ message: 'ไม่พบรายการจองนี้' });
+            return res.status(403).json({ message: 'คุณไม่มีสิทธิ์ยกเลิกการจองของคนอื่น' });
         }
 
         // Check status
@@ -197,7 +205,7 @@ const cancelBooking = async (req, res) => {
         booking.status = 'Cancelled';
         await booking.save();
 
-        // Revert Service Availability
+        // คืนค่าความว่างให้ Service (Revert Availability)
         await Service.findByIdAndUpdate(booking.serviceId, { isBooked: false });
 
         res.status(200).json({ message: 'Booking cancelled successfully', booking });
